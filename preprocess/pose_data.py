@@ -9,11 +9,10 @@ sys.path.append('../lib')
 from align import align_nocs_to_depth
 from utils import load_depth
 
-
 def create_img_list(data_dir):
     """ Create train/val/test data list for CAMERA and Real. """
     # CAMERA dataset
-    for subset in ['train', 'val']:
+    for subset in ['val']:
         img_list = []
         img_dir = os.path.join(data_dir, 'CAMERA', subset)
         folder_list = [name for name in os.listdir(img_dir) if os.path.isdir(os.path.join(img_dir, name))]
@@ -25,8 +24,8 @@ def create_img_list(data_dir):
         with open(os.path.join(data_dir, 'CAMERA', subset+'_list_all.txt'), 'w') as f:
             for img_path in img_list:
                 f.write("%s\n" % img_path)
-    # Real dataset
-    for subset in ['train', 'test']:
+    # # Real dataset
+    for subset in ['test']:
         img_list = []
         img_dir = os.path.join(data_dir, 'Real', subset)
         folder_list = [name for name in sorted(os.listdir(img_dir)) if os.path.isdir(os.path.join(img_dir, name))]
@@ -122,133 +121,133 @@ def process_data(img_path, depth):
     return masks, coords, class_ids, instance_ids, model_list, bboxes
 
 
-def annotate_camera_train(data_dir):
-    """ Generate gt labels for CAMERA train data. """
-    camera_train = open(os.path.join(data_dir, 'CAMERA', 'train_list_all.txt')).read().splitlines()
-    intrinsics = np.array([[577.5, 0, 319.5], [0, 577.5, 239.5], [0, 0, 1]])
-    # meta info for re-label mug category
-    with open(os.path.join(data_dir, 'obj_models/mug_meta.pkl'), 'rb') as f:
-        mug_meta = cPickle.load(f)
-
-    valid_img_list = []
-    for img_path in tqdm(camera_train):
-        img_full_path = os.path.join(data_dir, 'CAMERA', img_path)
-        all_exist = os.path.exists(img_full_path + '_color.png') and \
-                    os.path.exists(img_full_path + '_coord.png') and \
-                    os.path.exists(img_full_path + '_depth.png') and \
-                    os.path.exists(img_full_path + '_mask.png') and \
-                    os.path.exists(img_full_path + '_meta.txt')
-        if not all_exist:
-            continue
-        depth = load_depth(img_full_path)
-        masks, coords, class_ids, instance_ids, model_list, bboxes = process_data(img_full_path, depth)
-        if instance_ids is None:
-            continue
-        # Umeyama alignment of GT NOCS map with depth image
-        scales, rotations, translations, error_messages, _ = \
-            align_nocs_to_depth(masks, coords, depth, intrinsics, instance_ids, img_path)
-        if error_messages:
-            continue
-        # re-label for mug category
-        for i in range(len(class_ids)):
-            if class_ids[i] == 6:
-                T0 = mug_meta[model_list[i]][0]
-                s0 = mug_meta[model_list[i]][1]
-                T = translations[i] - scales[i] * rotations[i] @ T0
-                s = scales[i] / s0
-                scales[i] = s
-                translations[i] = T
-        # write results
-        gts = {}
-        gts['class_ids'] = class_ids    # int list, 1 to 6
-        gts['bboxes'] = bboxes  # np.array, [[y1, x1, y2, x2], ...]
-        gts['scales'] = scales.astype(np.float32)  # np.array, scale factor from NOCS model to depth observation
-        gts['rotations'] = rotations.astype(np.float32)    # np.array, R
-        gts['translations'] = translations.astype(np.float32)  # np.array, T
-        gts['instance_ids'] = instance_ids  # int list, start from 1
-        gts['model_list'] = model_list  # str list, model id/name
-        with open(img_full_path + '_label.pkl', 'wb') as f:
-            cPickle.dump(gts, f)
-        valid_img_list.append(img_path)
-    # write valid img list to file
-    with open(os.path.join(data_dir, 'CAMERA/train_list.txt'), 'w') as f:
-        for img_path in valid_img_list:
-            f.write("%s\n" % img_path)
-
-
-def annotate_real_train(data_dir):
-    """ Generate gt labels for Real train data through PnP. """
-    real_train = open(os.path.join(data_dir, 'Real/train_list_all.txt')).read().splitlines()
-    intrinsics = np.array([[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]])
-    # scale factors for all instances
-    scale_factors = {}
-    path_to_size = glob.glob(os.path.join(data_dir, 'obj_models/real_train', '*_norm.txt'))
-    for inst_path in sorted(path_to_size):
-        instance = os.path.basename(inst_path).split('.')[0]
-        bbox_dims = np.loadtxt(inst_path)
-        scale_factors[instance] = np.linalg.norm(bbox_dims)
-    # meta info for re-label mug category
-    with open(os.path.join(data_dir, 'obj_models/mug_meta.pkl'), 'rb') as f:
-        mug_meta = cPickle.load(f)
-
-    valid_img_list = []
-    for img_path in tqdm(real_train):
-        img_full_path = os.path.join(data_dir, 'Real', img_path)
-        all_exist = os.path.exists(img_full_path + '_color.png') and \
-                    os.path.exists(img_full_path + '_coord.png') and \
-                    os.path.exists(img_full_path + '_depth.png') and \
-                    os.path.exists(img_full_path + '_mask.png') and \
-                    os.path.exists(img_full_path + '_meta.txt')
-        if not all_exist:
-            continue
-        depth = load_depth(img_full_path)
-        masks, coords, class_ids, instance_ids, model_list, bboxes = process_data(img_full_path, depth)
-        if instance_ids is None:
-            continue
-        # compute pose
-        num_insts = len(class_ids)
-        scales = np.zeros(num_insts)
-        rotations = np.zeros((num_insts, 3, 3))
-        translations = np.zeros((num_insts, 3))
-        for i in range(num_insts):
-            s = scale_factors[model_list[i]]
-            mask = masks[:, :, i]
-            idxs = np.where(mask)
-            coord = coords[:, :, i, :]
-            coord_pts = s * (coord[idxs[0], idxs[1], :] - 0.5)
-            coord_pts = coord_pts[:, :, None]
-            img_pts = np.array([idxs[1], idxs[0]]).transpose()
-            img_pts = img_pts[:, :, None].astype(float)
-            distCoeffs = np.zeros((4, 1))    # no distoration
-            retval, rvec, tvec = cv2.solvePnP(coord_pts, img_pts, intrinsics, distCoeffs)
-            assert retval
-            R, _ = cv2.Rodrigues(rvec)
-            T = np.squeeze(tvec)
-            # re-label for mug category
-            if class_ids[i] == 6:
-                T0 = mug_meta[model_list[i]][0]
-                s0 = mug_meta[model_list[i]][1]
-                T = T - s * R @ T0
-                s = s / s0
-            scales[i] = s
-            rotations[i] = R
-            translations[i] = T
-        # write results
-        gts = {}
-        gts['class_ids'] = class_ids    # int list, 1 to 6
-        gts['bboxes'] = bboxes  # np.array, [[y1, x1, y2, x2], ...]
-        gts['scales'] = scales.astype(np.float32)  # np.array, scale factor from NOCS model to depth observation
-        gts['rotations'] = rotations.astype(np.float32)    # np.array, R
-        gts['translations'] = translations.astype(np.float32)  # np.array, T
-        gts['instance_ids'] = instance_ids  # int list, start from 1
-        gts['model_list'] = model_list  # str list, model id/name
-        with open(img_full_path + '_label.pkl', 'wb') as f:
-            cPickle.dump(gts, f)
-        valid_img_list.append(img_path)
-    # write valid img list to file
-    with open(os.path.join(data_dir, 'Real/train_list.txt'), 'w') as f:
-        for img_path in valid_img_list:
-            f.write("%s\n" % img_path)
+# def annotate_camera_train(data_dir):
+#     """ Generate gt labels for CAMERA train data. """
+#     camera_train = open(os.path.join(data_dir, 'CAMERA', 'train_list_all.txt')).read().splitlines()
+#     intrinsics = np.array([[577.5, 0, 319.5], [0, 577.5, 239.5], [0, 0, 1]])
+#     # meta info for re-label mug category
+#     with open(os.path.join(data_dir, 'obj_models/mug_meta.pkl'), 'rb') as f:
+#         mug_meta = cPickle.load(f)
+#
+#     valid_img_list = []
+#     for img_path in tqdm(camera_train):
+#         img_full_path = os.path.join(data_dir, 'CAMERA', img_path)
+#         all_exist = os.path.exists(img_full_path + '_color.png') and \
+#                     os.path.exists(img_full_path + '_coord.png') and \
+#                     os.path.exists(img_full_path + '_depth.png') and \
+#                     os.path.exists(img_full_path + '_mask.png') and \
+#                     os.path.exists(img_full_path + '_meta.txt')
+#         if not all_exist:
+#             continue
+#         depth = load_depth(img_full_path)
+#         masks, coords, class_ids, instance_ids, model_list, bboxes = process_data(img_full_path, depth)
+#         if instance_ids is None:
+#             continue
+#         # Umeyama alignment of GT NOCS map with depth image
+#         scales, rotations, translations, error_messages, _ = \
+#             align_nocs_to_depth(masks, coords, depth, intrinsics, instance_ids, img_path)
+#         if error_messages:
+#             continue
+#         # re-label for mug category
+#         for i in range(len(class_ids)):
+#             if class_ids[i] == 6:
+#                 T0 = mug_meta[model_list[i]][0]
+#                 s0 = mug_meta[model_list[i]][1]
+#                 T = translations[i] - scales[i] * rotations[i] @ T0
+#                 s = scales[i] / s0
+#                 scales[i] = s
+#                 translations[i] = T
+#         # write results
+#         gts = {}
+#         gts['class_ids'] = class_ids    # int list, 1 to 6
+#         gts['bboxes'] = bboxes  # np.array, [[y1, x1, y2, x2], ...]
+#         gts['scales'] = scales.astype(np.float32)  # np.array, scale factor from NOCS model to depth observation
+#         gts['rotations'] = rotations.astype(np.float32)    # np.array, R
+#         gts['translations'] = translations.astype(np.float32)  # np.array, T
+#         gts['instance_ids'] = instance_ids  # int list, start from 1
+#         gts['model_list'] = model_list  # str list, model id/name
+#         with open(img_full_path + '_label.pkl', 'wb') as f:
+#             cPickle.dump(gts, f)
+#         valid_img_list.append(img_path)
+#     # write valid img list to file
+#     with open(os.path.join(data_dir, 'CAMERA/train_list.txt'), 'w') as f:
+#         for img_path in valid_img_list:
+#             f.write("%s\n" % img_path)
+#
+#
+# def annotate_real_train(data_dir):
+#     """ Generate gt labels for Real train data through PnP. """
+#     real_train = open(os.path.join(data_dir, 'Real/train_list_all.txt')).read().splitlines()
+#     intrinsics = np.array([[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]])
+#     # scale factors for all instances
+#     scale_factors = {}
+#     path_to_size = glob.glob(os.path.join(data_dir, 'obj_models/real_train', '*_norm.txt'))
+#     for inst_path in sorted(path_to_size):
+#         instance = os.path.basename(inst_path).split('.')[0]
+#         bbox_dims = np.loadtxt(inst_path)
+#         scale_factors[instance] = np.linalg.norm(bbox_dims)
+#     # meta info for re-label mug category
+#     with open(os.path.join(data_dir, 'obj_models/mug_meta.pkl'), 'rb') as f:
+#         mug_meta = cPickle.load(f)
+#
+#     valid_img_list = []
+#     for img_path in tqdm(real_train):
+#         img_full_path = os.path.join(data_dir, 'Real', img_path)
+#         all_exist = os.path.exists(img_full_path + '_color.png') and \
+#                     os.path.exists(img_full_path + '_coord.png') and \
+#                     os.path.exists(img_full_path + '_depth.png') and \
+#                     os.path.exists(img_full_path + '_mask.png') and \
+#                     os.path.exists(img_full_path + '_meta.txt')
+#         if not all_exist:
+#             continue
+#         depth = load_depth(img_full_path)
+#         masks, coords, class_ids, instance_ids, model_list, bboxes = process_data(img_full_path, depth)
+#         if instance_ids is None:
+#             continue
+#         # compute pose
+#         num_insts = len(class_ids)
+#         scales = np.zeros(num_insts)
+#         rotations = np.zeros((num_insts, 3, 3))
+#         translations = np.zeros((num_insts, 3))
+#         for i in range(num_insts):
+#             s = scale_factors[model_list[i]]
+#             mask = masks[:, :, i]
+#             idxs = np.where(mask)
+#             coord = coords[:, :, i, :]
+#             coord_pts = s * (coord[idxs[0], idxs[1], :] - 0.5)
+#             coord_pts = coord_pts[:, :, None]
+#             img_pts = np.array([idxs[1], idxs[0]]).transpose()
+#             img_pts = img_pts[:, :, None].astype(float)
+#             distCoeffs = np.zeros((4, 1))    # no distoration
+#             retval, rvec, tvec = cv2.solvePnP(coord_pts, img_pts, intrinsics, distCoeffs)
+#             assert retval
+#             R, _ = cv2.Rodrigues(rvec)
+#             T = np.squeeze(tvec)
+#             # re-label for mug category
+#             if class_ids[i] == 6:
+#                 T0 = mug_meta[model_list[i]][0]
+#                 s0 = mug_meta[model_list[i]][1]
+#                 T = T - s * R @ T0
+#                 s = s / s0
+#             scales[i] = s
+#             rotations[i] = R
+#             translations[i] = T
+#         # write results
+#         gts = {}
+#         gts['class_ids'] = class_ids    # int list, 1 to 6
+#         gts['bboxes'] = bboxes  # np.array, [[y1, x1, y2, x2], ...]
+#         gts['scales'] = scales.astype(np.float32)  # np.array, scale factor from NOCS model to depth observation
+#         gts['rotations'] = rotations.astype(np.float32)    # np.array, R
+#         gts['translations'] = translations.astype(np.float32)  # np.array, T
+#         gts['instance_ids'] = instance_ids  # int list, start from 1
+#         gts['model_list'] = model_list  # str list, model id/name
+#         with open(img_full_path + '_label.pkl', 'wb') as f:
+#             cPickle.dump(gts, f)
+#         valid_img_list.append(img_path)
+#     # write valid img list to file
+#     with open(os.path.join(data_dir, 'Real/train_list.txt'), 'w') as f:
+#         for img_path in valid_img_list:
+#             f.write("%s\n" % img_path)
 
 
 def annotate_test_data(data_dir):
@@ -265,7 +264,7 @@ def annotate_test_data(data_dir):
     camera_intrinsics = np.array([[577.5, 0, 319.5], [0, 577.5, 239.5], [0, 0, 1]])
     real_intrinsics = np.array([[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]])
     # compute model size
-    model_file_path = ['obj_models/camera_val.pkl', 'obj_models/real_test.pkl']
+    model_file_path = ['obj_models/camera_val.pkl', 'obj_models/real_test.pkl']  # 'obj_models/camera_val.pkl'
     models = {}
     for path in model_file_path:
         with open(os.path.join(data_dir, path), 'rb') as f:
@@ -330,9 +329,14 @@ def annotate_test_data(data_dir):
             scales = np.zeros(num_insts)
             rotations = np.zeros((num_insts, 3, 3))
             translations = np.zeros((num_insts, 3))
+            bbreak = False
             for i in range(num_insts):
                 gt_idx = map_to_nocs[i]
-                sizes[i] = model_sizes[model_list[i]]
+                try:
+                    sizes[i] = model_sizes[model_list[i]]
+                except:
+                    bbreak = True
+                    continue
                 sRT = gt_sRT[gt_idx]
                 s = np.cbrt(np.linalg.det(sRT[:3, :3]))
                 R = sRT[:3, :3] / s
@@ -352,6 +356,9 @@ def annotate_test_data(data_dir):
                 sRT[:3, :3] = s * R
                 sRT[:3, 3] = T
                 poses[i] = sRT
+            # continue
+            if bbreak:
+                continue
             # write results
             gts = {}
             gts['class_ids'] = np.array(class_ids)    # int list, 1 to 6
@@ -374,10 +381,10 @@ def annotate_test_data(data_dir):
 
 
 if __name__ == '__main__':
-    data_dir = '/home/tianmeng/Documents/pose_ws/object-deformnet/data'
+    data_dir = '/home/leech/code/object-deformnet/data'
     # create list for all data
     create_img_list(data_dir)
     # annotate dataset and re-write valid data to list
-    annotate_camera_train(data_dir)
-    annotate_real_train(data_dir)
+    # annotate_camera_train(data_dir)
+    # annotate_real_train(data_dir)
     annotate_test_data(data_dir)

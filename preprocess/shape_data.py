@@ -23,14 +23,17 @@ def save_nocs_model_to_file(obj_model_dir):
                      'f42a9784d165ad2f5e723252788c3d6e': np.array([0.117, 0.0, -0.026])}
 
     # CAMERA dataset
-    for subset in ['train', 'val']:
+    for subset in ['val']:
         camera = {}
         for synsetId in ['02876657', '02880940', '02942699', '02946921', '03642806', '03797390']:
             synset_dir = os.path.join(obj_model_dir, subset, synsetId)
             inst_list = sorted(os.listdir(synset_dir))
             for instance in inst_list:
                 path_to_mesh_model = os.path.join(synset_dir, instance, 'model.obj')
-                model_points = sample_points_from_mesh(path_to_mesh_model, 1024, fps=True, ratio=3)
+                try:
+                    model_points = sample_points_from_mesh(path_to_mesh_model, 1024, fps=True, ratio=3)
+                except:
+                    continue
                 # flip z-axis in CAMERA
                 model_points = model_points * np.array([[1.0, 1.0, -1.0]])
                 # re-align mug category
@@ -52,7 +55,7 @@ def save_nocs_model_to_file(obj_model_dir):
         with open(os.path.join(obj_model_dir, 'camera_{}.pkl'.format(subset)), 'wb') as f:
             cPickle.dump(camera, f)
     # Real dataset
-    for subset in ['real_train', 'real_test']:
+    for subset in ['real_test']:
         real = {}
         inst_list = glob.glob(os.path.join(obj_model_dir, subset, '*.obj'))
         for inst_path in inst_list:
@@ -94,17 +97,17 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
     # read all the paths to models
     print('Sampling points from mesh model ...')
     if with_normal:
-        train_data = np.zeros((3000, n_points, 6), dtype=np.float32)
+        # train_data = np.zeros((3000, n_points, 6), dtype=np.float32)
         val_data = np.zeros((500, n_points, 6), dtype=np.float32)
     else:
-        train_data = np.zeros((3000, n_points, 3), dtype=np.float32)
+        # train_data = np.zeros((3000, n_points, 3), dtype=np.float32)
         val_data = np.zeros((500, n_points, 3), dtype=np.float32)
-    train_label = []
+    # train_label = []
     val_label = []
-    train_count = 0
+    # train_count = 0
     val_count = 0
     # CAMERA
-    for subset in ['train', 'val']:
+    for subset in ['val']:
         for catId in range(1, 7):
             synset_dir = os.path.join(obj_model_dir, subset, catId_to_synsetId[catId])
             inst_list = sorted(os.listdir(synset_dir))
@@ -112,16 +115,20 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
                 path_to_mesh_model = os.path.join(synset_dir, instance, 'model.obj')
                 if instance == 'b9be7cfe653740eb7633a2dd89cec754':
                     continue
-                model_points = sample_points_from_mesh(path_to_mesh_model, n_points, with_normal, fps=fps, ratio=2)
+                try:
+                    model_points = sample_points_from_mesh(path_to_mesh_model, n_points, with_normal, fps=fps, ratio=2)
+                except:
+                    continue
                 model_points = model_points * np.array([[1.0, 1.0, -1.0]])
                 if catId == 6:
                     shift = mug_meta[instance][0]
                     scale = mug_meta[instance][1]
                     model_points = scale * (model_points + shift)
                 if subset == 'train':
-                    train_data[train_count] = model_points
-                    train_label.append(catId)
-                    train_count += 1
+                    pass
+                    # train_data[train_count] = model_points
+                    # train_label.append(catId)
+                    # train_count += 1
                 else:
                     val_data[val_count] = model_points
                     val_label.append(catId)
@@ -137,15 +144,16 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
                     # TODO: check whether need to flip z-axis, currently not used
                     model_points = model_points * np.array([[1.0, 1.0, -1.0]])
                     if subset == 'train':
-                        train_data[train_count] = model_points
-                        train_label.append(0)
-                        train_count += 1
+                        pass
+                        # train_data[train_count] = model_points
+                        # train_label.append(0)
+                        # train_count += 1
                     else:
                         val_data[val_count] = model_points
                         val_label.append(0)
                         val_count += 1
     # Real
-    for subset in ['real_train', 'real_test']:
+    for subset in ['real_test']:
         path_to_mesh_models = glob.glob(os.path.join(obj_model_dir, subset, '*.obj'))
         for inst_path in sorted(path_to_mesh_models):
             instance = os.path.basename(inst_path).split('.')[0]
@@ -172,23 +180,24 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
                 scale = mug_meta[instance][1]
                 model_points = scale * (model_points + shift)
             if subset == 'real_train':
-                train_data[train_count] = model_points
-                train_label.append(catId)
-                train_count += 1
+                pass
+                # train_data[train_count] = model_points
+                # train_label.append(catId)
+                # train_count += 1
             else:
                 val_data[val_count] = model_points
                 val_label.append(catId)
                 val_count += 1
 
-    num_train_instances = len(train_label)
+    # num_train_instances = len(train_label)
     num_val_instances = len(val_label)
-    assert num_train_instances == train_count
+    # assert num_train_instances == train_count
     assert num_val_instances == val_count
-    train_data = train_data[:num_train_instances]
+    # train_data = train_data[:num_train_instances]
     val_data = val_data[:num_val_instances]
-    train_label = np.array(train_label, dtype=np.uint8)
+    # train_label = np.array(train_label, dtype=np.uint8)
     val_label = np.array(val_label, dtype=np.uint8)
-    print('{} shapes found in train dataset'.format(num_train_instances))
+    # print('{} shapes found in train dataset'.format(num_train_instances))
     print('{} shapes found in val dataset'.format(num_val_instances))
 
     # write to HDF5 file
@@ -198,10 +207,10 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
     else:
         filename = 'ShapeNetCore_{}.h5'.format(n_points)
     hfile = h5py.File(os.path.join(obj_model_dir, filename), 'w')
-    train_dataset = hfile.create_group('train')
-    train_dataset.attrs.create('len', num_train_instances)
-    train_dataset.create_dataset('data', data=train_data, compression='gzip', dtype='float32')
-    train_dataset.create_dataset('label', data=train_label, compression='gzip', dtype='uint8')
+    # train_dataset = hfile.create_group('train')
+    # train_dataset.attrs.create('len', num_train_instances)
+    # train_dataset.create_dataset('data', data=train_data, compression='gzip', dtype='float32')
+    # train_dataset.create_dataset('label', data=train_label, compression='gzip', dtype='uint8')
     val_dataset = hfile.create_group('val')
     val_dataset.attrs.create('len', num_val_instances)
     val_dataset.create_dataset('data', data=val_data, compression='gzip', dtype='float32')
@@ -210,7 +219,7 @@ def save_model_to_hdf5(obj_model_dir, n_points, fps=False, include_distractors=F
 
 
 if __name__ == '__main__':
-    obj_model_dir = '/home/tianmeng/Documents/pose_ws/object-deformnet/data/obj_models'
+    obj_model_dir = "/home/leech/code/object-deformnet/data/obj_models/"
     # Save ground truth models for training deform network
     save_nocs_model_to_file(obj_model_dir)
     # Save models to HDF5 file for training the auto-encoder.
